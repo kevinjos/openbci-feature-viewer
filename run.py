@@ -3,6 +3,8 @@ import time
 from collections import deque
 import struct
 import decs
+import traceback
+import sys
 
 class Conn(object):
   def __init__(self):
@@ -50,6 +52,19 @@ class Packet(object):
   ACC_X  = ['\x00', '\x00']
   ACC_Y  = ['\x00', '\x00']
   ACC_Z  = ['\x00', '\x00']
+  def __init__(self, packet_list):
+    self.SEQ    = ord(packet_list[1])
+    self.CHAN1  = self.convert_24_bit_to_int(packet_list[2:5])
+    self.CHAN2  = self.convert_24_bit_to_int(packet_list[5:8])
+    self.CHAN3  = self.convert_24_bit_to_int(packet_list[8:11])
+    self.CHAN4  = self.convert_24_bit_to_int(packet_list[11:14])
+    self.CHAN5  = self.convert_24_bit_to_int(packet_list[14:17])
+    self.CHAN6  = self.convert_24_bit_to_int(packet_list[17:20])
+    self.CHAN7  = self.convert_24_bit_to_int(packet_list[20:23])
+    self.CHAN8  = self.convert_24_bit_to_int(packet_list[23:26])
+    self.ACC_X  = self.convert_16_bit_to_int(packet_list[26:28])
+    self.ACC_Y  = self.convert_16_bit_to_int(packet_list[28:30])
+    self.ACC_Z  = self.convert_16_bit_to_int(packet_list[30:32])
   def convert_24_bit_to_int(self, raw_chan):
     MSB = raw_chan[0]
     if ord(MSB) > 126:
@@ -72,57 +87,39 @@ class StreamDecoder(object):
   def __init__(self, stream=None, receiver=None):
     self.stream = stream
     self.receiver = receiver
-    self.sample_packet = Packet()
-    self.byte_buffer = deque([], 256)
+    self.sample_packet = Packet(['\x00' for n in range(33)])
     self.packet_buffer = deque([self.sample_packet], 256)
     self.compile_methods()
   def compile_methods(self):
-    self.bbappend = self.byte_buffer.append
     self.pbappend = self.packet_buffer.append
   def read_one_off_stream(self):
     b = self.stream.next()
-    self.bbappend(b)
     return b
   def is_sequence_number_aligned(self, seq_num):
     if seq_num == 0:
       return self.packet_buffer[-1].SEQ == 255
     else:
       return self.packet_buffer[-1].SEQ + 1 == seq_num
-  def encode_packet(self, packet_list):
-    p = Packet()
-    p.SEQ    = packet_list[1]
-    p.CHAN1  = p.convert_24_bit_to_int(packet_list[2:5])
-    p.CHAN2  = p.convert_24_bit_to_int(packet_list[5:8])
-    p.CHAN3  = p.convert_24_bit_to_int(packet_list[8:11])
-    p.CHAN4  = p.convert_24_bit_to_int(packet_list[11:14])
-    p.CHAN5  = p.convert_24_bit_to_int(packet_list[14:17])
-    p.CHAN6  = p.convert_24_bit_to_int(packet_list[17:20])
-    p.CHAN7  = p.convert_24_bit_to_int(packet_list[20:23])
-    p.CHAN8  = p.convert_24_bit_to_int(packet_list[23:26])
-    p.ACC_X  = p.convert_16_bit_to_int(packet_list[26:28])
-    p.ACC_Y  = p.convert_16_bit_to_int(packet_list[28:30])
-    p.ACC_Z  = p.convert_16_bit_to_int(packet_list[30:32])
-    return p
   def send_encoded_packet(self):
     p_list = range(self.sample_packet.LEN)
     while p_list[0] != '\xa0':
       b = self.read_one_off_stream()
       if b == '\xa0':
         p_list[0] = b 
-        p_list[1] = ord(self.read_one_off_stream())
-        seq_num_aligned = self.is_sequence_number_aligned(p_list[1])
+        p_list[1] = self.read_one_off_stream()
+        seq_num_aligned = self.is_sequence_number_aligned(ord(p_list[1]))
         for i in range(31): #Fill the packet with data from stream, and check footer
           p_list[i+2] = self.read_one_off_stream()
         footer_aligned = p_list[32] == '\xc0'
     #if not foot_aligned: We need to figure on what to do when the footer is not aligned
     #  do_something() possibly flushing the buffers and reseting the connection
     #  this sounds extream but the event is potentially catistrophic
+    p = Packet(p_list)
     if seq_num_aligned: #Send encoded packet to the receiver
-      p = self.encode_packet(p_list)
       self.pbappend(p)
       self.receiver.send(p)
-    else: #Send last encoded packet to receiver until the sequence number aligns
-      this_seq_num = p_list[1]
+    else: #Send last encoded packet to receiver until the sequence number aligns DF: Set flag
+      this_seq_num = p.SEQ
       last_known_seq_num = self.packet_buffer[-1].SEQ
       for n in range(this_seq_num - last_known_seq_num):
         p = self.packet_buffer[-1]
@@ -146,7 +143,7 @@ def do_stuff():
     if i % (sample_rate) == 0:
       tk.append(time.time())
       tbtwn = tk[1] - tk[0]
-      print tbtwn, i, p.CHAN1, p.CHAN2
+      print tbtwn, i, p.SEQ, p.CHAN1, p.CHAN2
 
 def main():
   stream = c.start_stream()
@@ -159,7 +156,8 @@ if __name__ == '__main__':
   try:
     c = Conn()
     main()
-  except Exception, e:
-    print e.args, e.message
+  except:
+    exc_type, exc_value, exc_traceback = sys.exc_info()
+    traceback.print_exception(exc_type, exc_value, exc_traceback)
   finally:
     c.stop_stream()
