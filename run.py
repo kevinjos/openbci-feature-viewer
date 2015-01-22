@@ -101,31 +101,34 @@ class StreamDecoder(object):
     else:
       return self.packet_buffer[-1].SEQ + 1 == seq_num
   def send_encoded_packet(self):
-    p_list = range(self.sample_packet.LEN)
-    while p_list[0] != '\xa0':
-      b = self.read_one_off_stream()
-      if b == '\xa0':
-        p_list[0] = b 
-        p_list[1] = self.read_one_off_stream()
-        seq_num_aligned = self.is_sequence_number_aligned(ord(p_list[1]))
-        for i in range(31): #Fill the packet with data from stream, and check footer
-          p_list[i+2] = self.read_one_off_stream()
-        footer_aligned = p_list[32] == '\xc0'
-    #if not foot_aligned: We need to figure on what to do when the footer is not aligned
-    #  do_something() possibly flushing the buffers and reseting the connection
-    #  this sounds extream but the event is potentially catistrophic
-    p = Packet(p_list)
-    if seq_num_aligned: #Send encoded packet to the receiver
-      self.pbappend(p)
-      self.receiver.send(p)
-    else: #Send last encoded packet to receiver until the sequence number aligns DF: Set flag
-      this_seq_num = p.SEQ
-      last_known_seq_num = self.packet_buffer[-1].SEQ
-      for n in range(this_seq_num - last_known_seq_num):
-        p = self.packet_buffer[-1]
-        p.SEQ = last_known_seq_num + n + 1
+    while True:
+      p_list = range(self.sample_packet.LEN)
+      while p_list[0] != '\xa0':
+        b = self.read_one_off_stream()
+        if b == '\xa0':
+          p_list[0] = b 
+          p_list[1] = self.read_one_off_stream()
+          seq_num_aligned = self.is_sequence_number_aligned(ord(p_list[1]))
+          for i in range(31): #Fill the packet with data from stream, and check footer
+            p_list[i+2] = self.read_one_off_stream()
+          footer_aligned = p_list[32] == '\xc0'
+      #if not foot_aligned: We need to figure on what to do when the footer is not aligned
+      #  do_something() possibly flushing the buffers and reseting the connection
+      #  this sounds extream but the event is potentially catistrophic
+      p = Packet(p_list)
+      if seq_num_aligned: #Send encoded packet to the receiver
         self.pbappend(p)
         self.receiver.send(p)
+        yield p
+      else: #Send last encoded packet to receiver until the sequence number aligns DF: Set flag
+        this_seq_num = p.SEQ
+        last_known_seq_num = self.packet_buffer[-1].SEQ
+        for n in range(this_seq_num - last_known_seq_num):
+          p = self.packet_buffer[-1]
+          p.SEQ = last_known_seq_num + n + 1
+          self.pbappend(p)
+          self.receiver.send(p)
+          yield p
 
 @decs.coroutine
 def do_stuff():
@@ -149,8 +152,9 @@ def main():
   stream = c.start_stream()
   receiver = do_stuff()
   d = StreamDecoder(stream=stream, receiver=receiver)
+  packet_stream = d.send_encoded_packet()
   while True:
-    d.send_encoded_packet()
+    packet_stream.next()
 
 if __name__ == '__main__':
   try:

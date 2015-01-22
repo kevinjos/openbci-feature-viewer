@@ -7,6 +7,8 @@ from random import randint
 from time import sleep
 from run import Conn, StreamDecoder, Packet
 from decs import coroutine
+import sys
+import traceback
 
 class CellLogic(object):
   def __init__(self, rules='life'):
@@ -15,7 +17,6 @@ class CellLogic(object):
     ret = None
     if self.rules == 'eeg':
       packet = criteria
-      print("got packet")
     if self.rules == 'life':
       val, n = criteria
       if n == 2:
@@ -41,31 +42,22 @@ class CellLogic(object):
     elif self.rules == 'prime':
       self.rules = 'life'
 
+@coroutine
+def do_stuff():
+  print "do_stuff initialized"
+  while True:
+    packet = yield
+
 class EEG(object):
   def __init__(self):
-    print("initializing EEG")
-    try:
-      self.c = Conn()
-      self.receiver = self.do_stuff()
-      self.stream = self.c.start_stream()
-      print("We have a stream decoder")
-    except:
-      exc_type, exc_value, exc_traceback = sys.exc_info()
-      traceback.print_exception(exc_type, exc_value, exc_traceback)
-    finally:
-      self.c.stop_stream()
-  @coroutine
-  def do_stuff(self):
-    print("do_stuff about to loop / yield")
-    while True:
-      packet = yield
-      print("we have a packet")
-      raw_chan_1 = packet.CHAN1
-      print(raw_chan_1)
+    self.c = Conn()
+    self.receiver = do_stuff()
+    self.byte_stream = self.c.start_stream()
+    self.StreamDecoder = StreamDecoder(receiver=self.receiver, stream=self.byte_stream)
+    self.packet_stream = self.StreamDecoder.send_encoded_packet()
   def read_eeg_packet(self):
-    return self.stream.next()
-    #self.stream_decoder.send_encoded_packet() 
-    #return self.receiver.next()
+    p = self.packet_stream.next()
+    return p
 
 class Cell(object):
   def __init__(self, colony, row, col):
@@ -274,7 +266,6 @@ class ScreenRunner(object):
   def mode(self):
     self.cellrunner.logic.toggle()
   def next(self):
-    print("next")
     self.cellrunner.run(1, 0)
   def run(self):
     self.running = True
